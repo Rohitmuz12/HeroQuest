@@ -21,15 +21,15 @@ class VirtualJoystick(
     private var knobOffsetX = 0f
     private var knobOffsetY = 0f
 
-    private val baseFillPaint = Paint().apply { color = 0x33FFFFFF; isAntiAlias = true }
-    private val baseStrokePaint = Paint().apply { color = 0x55FFFFFF; style = Paint.Style.STROKE; strokeWidth = 4f; isAntiAlias = true }
-    private val knobPaint = Paint().apply { color = 0x99FFFFFF; isAntiAlias = true }
+    private val baseFillPaint = Paint().apply { color = 0x33FFFFFF.toInt(); isAntiAlias = true }
+    private val baseStrokePaint = Paint().apply { color = 0x55FFFFFF.toInt(); style = Paint.Style.STROKE; strokeWidth = 4f; isAntiAlias = true }
+    private val knobPaint = Paint().apply { color = 0x99FFFFFF.toInt(); isAntiAlias = true }
 
     /** True if the given touch point falls within range to start using this joystick. */
     fun isWithinActivationRange(touchX: Float, touchY: Float): Boolean {
         val dx = touchX - centerX
         val dy = touchY - centerY
-        return sqrt(dx * dx + dy * dy) <= baseRadius * 1.8f // a bit of slop so it's not pixel-perfect to grab
+        return sqrt(dx * dx + dy * dy) <= baseRadius * 1.8f
     }
 
     fun startTouch(pointerId: Int, touchX: Float, touchY: Float) {
