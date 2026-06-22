@@ -126,7 +126,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
             radius = buttonRadius, label = "ATK", color = Color.parseColor("#E84B4B")
         )
         jumpButton = TouchButton(
-            centerX = screenWidth - margin - buttonRadius * 2.6f,
+            centerX = screenWidth - margin - buttonRadius * 3.4f,
             centerY = screenHeight - margin - buttonRadius * 1.4f,
             radius = buttonRadius * 0.85f, label = "JUMP", color = Color.parseColor("#4B9CE8")
         )
