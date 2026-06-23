@@ -3,15 +3,20 @@ package com.example.heroquest.game
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.RadialGradient
+import android.graphics.Shader
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import com.example.heroquest.entity.Enemy
+import com.example.heroquest.entity.ParticleSystem
 import com.example.heroquest.entity.Platform
 import com.example.heroquest.entity.Player
 import com.example.heroquest.input.TouchButton
 import com.example.heroquest.input.VirtualJoystick
+import kotlin.random.Random
 
 enum class GameState { READY, PLAYING, GAME_OVER, VICTORY }
 
@@ -28,6 +33,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     private val enemies = mutableListOf<Enemy>()
     private val platforms = mutableListOf<Platform>()
     private var levelEndX = 0f
+    private val particles = ParticleSystem()
+    private data class GlowBlob(val worldX: Float, val y: Float, val radius: Float, val color: Int)
+    private val ambientGlows = mutableListOf<GlowBlob>()
 
     private lateinit var joystick: VirtualJoystick
     private lateinit var jumpButton: TouchButton
@@ -36,7 +44,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     private var cameraX = 0f
     private var state = GameState.READY
 
-    private val bgPaint = Paint().apply { color = Color.parseColor("#2D2436") }
+    private var shakeTime = 0f
+    private var shakeMagnitude = 0f
+
+    private val playerGlowColor = 0xFFE8B84B.toInt()
+    private val enemyGlowColor = 0xFFB04A4A.toInt()
+
     private val skylinePaint = Paint().apply { color = Color.parseColor("#3D3250") }
     private val hpBarBgPaint = Paint().apply { color = Color.parseColor("#3D2F5C") }
     private val hpBarFillPaint = Paint().apply { color = Color.parseColor("#E84B4B") }
@@ -45,6 +58,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT_BOLD, android.graphics.Typeface.BOLD)
     }
     private val dimPaint = Paint().apply { color = Color.parseColor("#AA000000") }
+
+    private lateinit var bgGradientPaint: Paint
+    private val ambientGlowPaint = Paint().apply { isAntiAlias = true }
 
     init {
         holder.addCallback(this)
@@ -56,6 +72,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         screenHeight = height
         groundY = screenHeight * 0.82f
         heroHeight = screenHeight * 0.22f
+
+        bgGradientPaint = Paint().apply {
+            shader = LinearGradient(
+                0f, 0f, 0f, screenHeight.toFloat(),
+                Color.parseColor("#1A1326"), Color.parseColor("#3D2F5C"),
+                Shader.TileMode.CLAMP
+            )
+        }
 
         setupLevel()
         setupControls()
@@ -108,6 +132,20 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         enemies.add(Enemy(startX = screenWidth * 1.9f, groundY = groundY, heightPx = heroHeight))
         enemies.add(Enemy(startX = screenWidth * 3.0f, groundY = groundY, heightPx = heroHeight))
         enemies.add(Enemy(startX = screenWidth * 3.5f, groundY = groundY, heightPx = heroHeight))
+
+        particles.clear()
+        ambientGlows.clear()
+        val glowColors = intArrayOf(0x33E8B84B, 0x338C6BE8, 0x336BE8D2)
+        repeat(24) { i ->
+            ambientGlows.add(
+                GlowBlob(
+                    worldX = Random.nextFloat() * levelEndX,
+                    y = groundY - Random.nextFloat() * screenHeight * 0.55f,
+                    radius = screenWidth * (0.04f + Random.nextFloat() * 0.05f),
+                    color = glowColors[i % glowColors.size]
+                )
+            )
+        }
     }
 
     private fun setupControls() {
@@ -184,6 +222,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     }
 
     fun update(dt: Float) {
+        particles.update(dt)
+        if (shakeTime > 0f) {
+            shakeTime -= dt
+            shakeMagnitude *= 0.88f
+        } else {
+            shakeMagnitude = 0f
+        }
+
         if (state != GameState.PLAYING) return
 
         val moveInput = joystick.horizontalValue()
@@ -215,8 +261,20 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         if (playerAttackBox != null && !player.hasAttackLanded()) {
             for (enemy in enemies) {
                 if (enemy.isAlive && enemy.bounds().intersects(playerAttackBox)) {
+                    val wasAlive = enemy.isAlive
                     enemy.takeDamage(18)
                     player.markAttackLanded()
+
+                    val hand = player.rig.leadHandWorldOffset(player.currentState())
+                    val sparkX = if (hand != null) player.x + hand.first else enemy.x
+                    val sparkY = if (hand != null) player.y + hand.second else enemy.y - heroHeight * 0.5f
+                    particles.emitHitSpark(sparkX, sparkY, playerGlowColor)
+                    triggerShake(0.15f, 10f)
+
+                    if (wasAlive && !enemy.isAlive) {
+                        particles.emitDefeatBurst(enemy.x, enemy.y - heroHeight * 0.5f, enemyGlowColor)
+                        triggerShake(0.25f, 18f)
+                    }
                 }
             }
         }
@@ -227,15 +285,46 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
                 if (player.bounds().intersects(enemyAttackBox)) {
                     player.takeDamage(8)
                     enemy.markAttackLanded()
+                    particles.emitHitSpark(player.x, player.y - heroHeight * 0.5f, enemyGlowColor)
+                    triggerShake(0.18f, 14f)
                 }
             }
         }
     }
 
-    fun render(canvas: Canvas) {
-        canvas.drawRect(0f, 0f, screenWidth.toFloat(), screenHeight.toFloat(), bgPaint)
+    private fun triggerShake(duration: Float, magnitude: Float) {
+        // Take the stronger of the two if multiple hits land the same frame, rather
+        // than overwriting with whichever happened to resolve last.
+        if (magnitude > shakeMagnitude) {
+            shakeTime = duration
+            shakeMagnitude = magnitude
+        }
+    }
 
-        // Simple parallax skyline rectangles for depth, cheap to draw.
+    fun render(canvas: Canvas) {
+        canvas.save()
+
+        if (shakeTime > 0f) {
+            val dx = (Random.nextFloat() - 0.5f) * shakeMagnitude
+            val dy = (Random.nextFloat() - 0.5f) * shakeMagnitude
+            canvas.translate(dx, dy)
+        }
+
+        canvas.drawRect(0f, 0f, screenWidth.toFloat(), screenHeight.toFloat(), bgGradientPaint)
+
+        // Ambient glow blobs drifting through the background, parallaxed slower than
+        // the foreground so they read as distant atmosphere, not part of the level geometry.
+        val glowParallax = cameraX * 0.5f
+        for (glow in ambientGlows) {
+            val screenX = glow.worldX - glowParallax
+            if (screenX < -glow.radius * 2 || screenX > screenWidth + glow.radius * 2) continue
+            ambientGlowPaint.shader = RadialGradient(
+                screenX, glow.y, glow.radius, glow.color, 0x00000000, Shader.TileMode.CLAMP
+            )
+            canvas.drawCircle(screenX, glow.y, glow.radius, ambientGlowPaint)
+        }
+
+        // Simple parallax skyline rectangles for additional depth.
         val skylineOffset = cameraX * 0.4f
         var bx = -(skylineOffset % (screenWidth * 0.3f))
         while (bx < screenWidth.toFloat()) {
@@ -246,8 +335,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         for (platform in platforms) platform.draw(canvas, cameraX)
         for (enemy in enemies) enemy.draw(canvas, cameraX)
         player.draw(canvas, cameraX)
+        particles.draw(canvas, cameraX)
 
         drawHud(canvas)
+
+        canvas.restore()
 
         when (state) {
             GameState.READY -> drawOverlay(canvas, "HERO QUEST", "Tap anywhere to start")

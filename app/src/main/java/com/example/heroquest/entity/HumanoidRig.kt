@@ -2,13 +2,14 @@ package com.example.heroquest.entity
 
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.RadialGradient
+import android.graphics.Shader
 import kotlin.math.sin
 
 /**
- * Draws a humanoid figure as connected limb segments (head, torso, 2 arms, 2 legs)
- * with each limb's angle computed procedurally from the current AnimState and an
- * internal time counter. No sprite sheets or image assets are needed — every pose
- * is geometry, so this works immediately without any art pipeline.
+ * Draws a humanoid figure as a glowing energy-being: thick rounded capsule limbs
+ * (not thin lines) with a soft outer glow that pulses on idle and flares brighter
+ * on attack. Still pure geometry — no sprite sheets or image assets needed.
  *
  * Coordinates are relative to (0,0) = the figure's feet/ground contact point,
  * with -y pointing up. Caller translates the canvas to the figure's world
@@ -20,15 +21,20 @@ class HumanoidRig(
     private val heightPx: Float
 ) {
     private var animTime = 0f
+    private var glowPulseTime = 0f
     var facingRight = true
         private set
 
-    private val bodyPaint = Paint().apply { color = bodyColor; isAntiAlias = true; strokeWidth = heightPx * 0.09f; strokeCap = Paint.Cap.ROUND }
-    private val limbPaint = Paint().apply { color = limbColor; isAntiAlias = true; strokeWidth = heightPx * 0.07f; strokeCap = Paint.Cap.ROUND }
+    // Thick capsule strokes instead of thin lines — this is what gives the
+    // figure actual visual "mass" instead of reading as a wireframe.
+    private val bodyPaint = Paint().apply { color = bodyColor; isAntiAlias = true; strokeWidth = heightPx * 0.22f; strokeCap = Paint.Cap.ROUND }
+    private val limbPaint = Paint().apply { color = limbColor; isAntiAlias = true; strokeWidth = heightPx * 0.16f; strokeCap = Paint.Cap.ROUND }
     private val headPaint = Paint().apply { color = bodyColor; isAntiAlias = true }
+    private val highlightPaint = Paint().apply { color = 0x55FFFFFF.toInt(); isAntiAlias = true }
+    private val glowPaint = Paint().apply { isAntiAlias = true }
 
     // Proportions, scaled off overall height so the rig scales cleanly with heightPx.
-    private val headRadius = heightPx * 0.12f
+    private val headRadius = heightPx * 0.14f
     private val torsoLength = heightPx * 0.32f
     private val upperLimbLength = heightPx * 0.18f
     private val lowerLimbLength = heightPx * 0.18f
@@ -49,6 +55,7 @@ class HumanoidRig(
             else -> 4f
         }
         animTime += dt * cycleSpeed
+        glowPulseTime += dt * 3f
     }
 
     fun draw(canvas: Canvas, state: AnimState) {
@@ -57,23 +64,38 @@ class HumanoidRig(
 
         val torsoTopY = shoulderY + pose.bob
         val hipYAdjusted = hipY + pose.bob
+        val centerY = (torsoTopY + hipYAdjusted) / 2f
 
-        // Torso (hip to shoulder)
+        // Outer glow: a soft radial halo behind the whole figure. Pulses gently at
+        // idle, holds a brighter steady glow during an attack for impact.
+        val glowStrength = if (state == AnimState.ATTACK) 1f else 0.7f + 0.3f * sin(glowPulseTime)
+        val glowRadius = heightPx * 0.7f * (0.9f + 0.15f * glowStrength)
+        glowPaint.shader = RadialGradient(
+            pose.torsoLean, centerY, glowRadius,
+            applyAlpha(bodyColor, (glowStrength * 110).toInt()), 0x00000000,
+            Shader.TileMode.CLAMP
+        )
+        canvas.drawCircle(pose.torsoLean, centerY, glowRadius, glowPaint)
+
+        // Torso (hip to shoulder) — drawn as a thick capsule stroke
         canvas.drawLine(0f, hipYAdjusted, pose.torsoLean, torsoTopY, bodyPaint)
 
-        // Head, sitting atop the torso
-        canvas.drawCircle(pose.torsoLean, torsoTopY - headRadius * 1.1f, headRadius, headPaint)
-
-        // Legs: hip -> knee -> foot, angle in degrees from straight-down
+        // Legs: hip -> knee -> foot
         drawLimb(canvas, 0f, hipYAdjusted, pose.leftLeg, upperLimbLength, lowerLimbLength, limbPaint)
         drawLimb(canvas, 0f, hipYAdjusted, pose.rightLeg, upperLimbLength, lowerLimbLength, limbPaint)
 
         // Arms: shoulder -> elbow -> hand
         drawLimb(canvas, pose.torsoLean, torsoTopY, pose.leftArm, upperLimbLength * 0.9f, lowerLimbLength * 0.9f, limbPaint)
         drawLimb(canvas, pose.torsoLean, torsoTopY, pose.rightArm, upperLimbLength * 0.9f, lowerLimbLength * 0.9f, limbPaint)
+
+        // Head, sitting atop the torso, drawn after limbs so it's never occluded
+        val headCenterY = torsoTopY - headRadius * 1.1f
+        canvas.drawCircle(pose.torsoLean, headCenterY, headRadius, headPaint)
+        // Small bright highlight for a glassy, energy-being look (same trick as the space game's orb)
+        canvas.drawCircle(pose.torsoLean - headRadius * 0.3f, headCenterY - headRadius * 0.3f, headRadius * 0.32f, highlightPaint)
     }
 
-    /** Draws a 2-segment limb (e.g. thigh+shin or upper arm+forearm) as a simple bend toward `angleDeg` from straight down. */
+    /** Draws a 2-segment capsule limb (e.g. thigh+shin or upper arm+forearm), bending toward `angleDeg` from straight down. */
     private fun drawLimb(canvas: Canvas, originX: Float, originY: Float, angleDeg: Float, upperLen: Float, lowerLen: Float, paint: Paint) {
         val rad = Math.toRadians(angleDeg.toDouble())
         val midX = originX + sin(rad).toFloat() * upperLen
@@ -85,6 +107,30 @@ class HumanoidRig(
 
         canvas.drawLine(originX, originY, midX, midY, paint)
         canvas.drawLine(midX, midY, endX, endY, paint)
+    }
+
+    /** Returns `color` with its alpha channel replaced by `alpha` (0-255), used for the glow gradient. */
+    private fun applyAlpha(color: Int, alpha: Int): Int {
+        val clampedAlpha = alpha.coerceIn(0, 255)
+        return (color and 0x00FFFFFF) or (clampedAlpha shl 24)
+    }
+
+    /** Returns the hand/weapon-tip position of the leading attack arm, for trail/spark effects. */
+    fun leadHandWorldOffset(state: AnimState): Pair<Float, Float>? {
+        if (state != AnimState.ATTACK) return null
+        val dir = if (facingRight) 1f else -1f
+        val pose = poseFor(state, dir)
+        val torsoTopY = shoulderY + pose.bob
+        val leadArmAngle = if (dir > 0) pose.leftArm else pose.rightArm
+        val rad = Math.toRadians(leadArmAngle.toDouble())
+        val lowerRad = Math.toRadians((leadArmAngle * 1.3f).toDouble())
+        val upperLen = upperLimbLength * 0.9f
+        val lowerLen = lowerLimbLength * 0.9f
+        val midX = pose.torsoLean + sin(rad).toFloat() * upperLen
+        val midY = torsoTopY + kotlin.math.cos(rad).toFloat() * upperLen
+        val endX = midX + sin(lowerRad).toFloat() * lowerLen
+        val endY = midY + kotlin.math.cos(lowerRad).toFloat() * lowerLen
+        return Pair(endX, endY)
     }
 
     /**
