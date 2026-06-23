@@ -122,8 +122,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         // platforms partway through to give the "jump across platforms" feel.
         levelEndX = screenWidth * 4f
         platforms.add(Platform(left = -200f, top = groundY, right = levelEndX, bottom = groundY + 400f))
-        platforms.add(Platform(left = screenWidth * 1.3f, top = groundY - heroHeight * 1.1f, right = screenWidth * 1.7f, bottom = groundY - heroHeight * 1.1f + 40f))
-        platforms.add(Platform(left = screenWidth * 2.1f, top = groundY - heroHeight * 1.6f, right = screenWidth * 2.45f, bottom = groundY - heroHeight * 1.6f + 40f))
+        platforms.add(Platform(left = screenWidth * 1.3f, top = groundY - heroHeight * 0.85f, right = screenWidth * 1.7f, bottom = groundY - heroHeight * 0.85f + 40f))
+        platforms.add(Platform(left = screenWidth * 2.1f, top = groundY - heroHeight * 1.15f, right = screenWidth * 2.45f, bottom = groundY - heroHeight * 1.15f + 40f))
 
         player = Player(startX = screenWidth * 0.15f, startY = groundY, heightPx = heroHeight)
 
@@ -233,12 +233,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         if (state != GameState.PLAYING) return
 
         val moveInput = joystick.horizontalValue()
-        val jumpPressedThisFrame = jumpButton.consumedPressThisFrame
-        val attackPressedThisFrame = attackButton.consumedPressThisFrame
+        val jumpPressedThisFrame = jumpButton.consumePendingPress()
+        val attackPressedThisFrame = attackButton.consumePendingPress()
 
         player.update(dt, moveInput, jumpPressedThisFrame, attackPressedThisFrame, platforms)
-        jumpButton.clearFrameFlags()
-        attackButton.clearFrameFlags()
 
         for (enemy in enemies) {
             enemy.update(dt, player.x, player.isAlive)

@@ -21,7 +21,7 @@ class Player(startX: Float, startY: Float, private val heightPx: Float) {
     private var velocityY = 0f
 
     private val gravity = 2200f
-    private val jumpVelocity = -950f
+    private val jumpVelocity = -1350f
     private val moveSpeed = 420f
 
     var isOnGround = false

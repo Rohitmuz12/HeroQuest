@@ -3,11 +3,20 @@ package com.example.heroquest.input
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.sqrt
 
 /**
  * A simple circular tap button (jump/attack). Tracks press state per-pointer so
  * multitouch (e.g. holding the joystick while also tapping attack) works correctly.
+ *
+ * Touch events arrive on the UI thread; update() runs on a separate GameThread.
+ * A plain Boolean "was pressed this frame" flag is NOT safe here — the UI thread
+ * could set it and the game thread could clear it again before update() ever
+ * reads it, silently dropping the tap. AtomicInteger fixes this: press() always
+ * increments, consumePendingPresses() atomically reads-and-resets, so every tap
+ * is guaranteed to be seen by exactly one frame's update(), never lost or double
+ * counted, regardless of how the two threads happen to interleave.
  */
 class TouchButton(
     private val centerX: Float,
@@ -17,8 +26,7 @@ class TouchButton(
     color: Int
 ) {
     private var activePointerId: Int = -1
-    var consumedPressThisFrame = false
-        private set
+    private val pendingPresses = AtomicInteger(0)
 
     private val fillPaint = Paint().apply { this.color = color; alpha = 160; isAntiAlias = true }
     private val pressedFillPaint = Paint().apply { this.color = color; alpha = 230; isAntiAlias = true }
@@ -36,20 +44,26 @@ class TouchButton(
         return sqrt(dx * dx + dy * dy) <= radius
     }
 
+    /** Called from the UI thread (onTouchEvent) when this button is tapped. */
     fun press(pointerId: Int) {
         activePointerId = pointerId
-        consumedPressThisFrame = true
+        pendingPresses.incrementAndGet()
     }
 
+    /** Called from the UI thread (onTouchEvent) when the pointer lifts. */
     fun release(pointerId: Int) {
         if (pointerId == activePointerId) activePointerId = -1
     }
 
     fun isPressed(): Boolean = activePointerId != -1
 
-    /** Call once per frame after reading consumedPressThisFrame, to reset the one-shot flag. */
-    fun clearFrameFlags() {
-        consumedPressThisFrame = false
+    /**
+     * Called once per frame from the GameThread's update(). Returns true if at
+     * least one press happened since the last call, and atomically resets the
+     * counter — so a press is consumed exactly once, with no race against press().
+     */
+    fun consumePendingPress(): Boolean {
+        return pendingPresses.getAndSet(0) > 0
     }
 
     fun draw(canvas: Canvas) {
