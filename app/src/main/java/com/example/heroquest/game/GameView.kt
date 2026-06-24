@@ -46,6 +46,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
 
     private var shakeTime = 0f
     private var shakeMagnitude = 0f
+    private var totalAttackPressesSeen = 0 // TEMPORARY DEBUG COUNTER
 
     private val playerGlowColor = 0xFFE8B84B.toInt()
     private val enemyGlowColor = 0xFFB04A4A.toInt()
@@ -235,6 +236,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         val moveInput = joystick.horizontalValue()
         val jumpPressedThisFrame = jumpButton.consumePendingPress()
         val attackPressedThisFrame = attackButton.consumePendingPress()
+        if (attackPressedThisFrame) totalAttackPressesSeen++
 
         player.update(dt, moveInput, jumpPressedThisFrame, attackPressedThisFrame, platforms)
 
@@ -363,6 +365,16 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
 
         val remainingEnemies = enemies.count { it.isAlive }
         canvas.drawText("Enemies remaining: $remainingEnemies", screenWidth * 0.5f, screenHeight * 0.06f, textPaint)
+
+        // TEMPORARY DEBUG TEXT — remove once the attack bug is found.
+        // Shows the player's live animation state and how many attack presses
+        // have been registered in total, so we can see exactly where the chain
+        // between "tap the button" and "play the swing" is breaking.
+        val debugPaint = Paint(textPaint).apply { textSize = screenWidth * 0.022f; color = Color.parseColor("#FFD23F") }
+        canvas.drawText(
+            "DEBUG state=${player.currentState()}  attackPresses=$totalAttackPressesSeen",
+            screenWidth * 0.5f, screenHeight * 0.11f, debugPaint
+        )
     }
 
     private fun drawOverlay(canvas: Canvas, title: String, subtitle: String) {
