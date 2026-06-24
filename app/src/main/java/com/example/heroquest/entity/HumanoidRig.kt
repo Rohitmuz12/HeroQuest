@@ -21,7 +21,9 @@ class HumanoidRig(
     private val heightPx: Float
 ) {
     private var animTime = 0f
+    private var attackAnimTime = 0f
     private var glowPulseTime = 0f
+    private var previousState = AnimState.IDLE
     var facingRight = true
         private set
 
@@ -51,10 +53,23 @@ class HumanoidRig(
         // animation at different character speeds.
         val cycleSpeed = when (state) {
             AnimState.RUN -> 8f + moveSpeedFraction * 6f
-            AnimState.ATTACK -> 14f
             else -> 4f
         }
-        animTime += dt * cycleSpeed
+
+        if (state == AnimState.ATTACK) {
+            // Reset the attack swing timer exactly once, the frame the attack starts —
+            // NOT animTime, which keeps running continuously across every other state
+            // and would otherwise already be far past the swing's useful sin() range
+            // by the time an attack begins, making the swing invisible.
+            if (previousState != AnimState.ATTACK) {
+                attackAnimTime = 0f
+            }
+            attackAnimTime += dt * 14f
+        } else {
+            animTime += dt * cycleSpeed
+        }
+
+        previousState = state
         glowPulseTime += dt * 3f
     }
 
@@ -166,7 +181,7 @@ class HumanoidRig(
             )
             AnimState.ATTACK -> {
                 // Fast forward swing on the lead arm, driven by a sharp sin curve for snap.
-                val swing = sin(animTime.coerceAtMost(Math.PI.toFloat())) * 90f
+                val swing = sin(attackAnimTime.coerceAtMost(Math.PI.toFloat())) * 90f
                 Pose(
                     leftArm = if (dir > 0) swing else -20f * dir,
                     rightArm = if (dir > 0) -20f * dir else swing,
