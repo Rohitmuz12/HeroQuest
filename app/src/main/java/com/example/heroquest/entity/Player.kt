@@ -133,7 +133,12 @@ class Player(startX: Float, startY: Float, private val heightPx: Float) {
 
         // Resolve the rig's animation state from physics, unless we're mid-attack/hit
         // (those states are time-driven above and shouldn't be overwritten here).
-        if (!isAttacking && state != AnimState.HIT) {
+        // IMPORTANT: re-check the live `state` field here, not the `isAttacking` value
+        // captured at the top of this function — if attackPressed just set state to
+        // ATTACK a few lines above, that stale snapshot would still say false and this
+        // guard would immediately overwrite the brand new ATTACK state before it's
+        // ever rendered, which is exactly what was happening.
+        if (state != AnimState.ATTACK && state != AnimState.HIT) {
             state = when {
                 !isOnGround && velocityY < 0f -> AnimState.JUMP
                 !isOnGround && velocityY >= 0f -> AnimState.FALL
