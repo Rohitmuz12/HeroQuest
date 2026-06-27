@@ -11,6 +11,7 @@ import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import com.example.heroquest.entity.AnimState
+import com.example.heroquest.entity.Boss
 import com.example.heroquest.entity.Enemy
 import com.example.heroquest.entity.ParticleSystem
 import com.example.heroquest.entity.Platform
