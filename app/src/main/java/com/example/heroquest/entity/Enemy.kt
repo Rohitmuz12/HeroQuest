@@ -37,7 +37,7 @@ class Enemy(startX: Float, groundY: Float, private val heightPx: Float) {
     fun bounds(): HitBox = HitBox(x - width / 2f, y - heightPx, x + width / 2f, y)
 
     fun attackHitbox(): HitBox? {
-        if (state != AnimState.ATTACK) return null
+        if (state != AnimState.PUNCH) return null
         val progress = attackTimer / attackDuration
         if (progress < 0.3f || progress > 0.8f) return null
 
@@ -71,7 +71,7 @@ class Enemy(startX: Float, groundY: Float, private val heightPx: Float) {
         val distanceToPlayer = kotlin.math.abs(playerX - x)
         facingRight = playerX >= x
 
-        if (state == AnimState.ATTACK) {
+        if (state == AnimState.PUNCH) {
             attackTimer += dt
             if (attackTimer >= attackDuration) {
                 state = AnimState.IDLE
@@ -81,7 +81,7 @@ class Enemy(startX: Float, groundY: Float, private val heightPx: Float) {
         } else if (!playerAlive) {
             state = AnimState.IDLE
         } else if (distanceToPlayer <= attackRange && attackCooldown <= 0f) {
-            state = AnimState.ATTACK
+            state = AnimState.PUNCH
             attackTimer = 0f
             attackHasHit = false
             attackCooldown = attackCooldownMax

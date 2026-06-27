@@ -10,6 +10,7 @@ import android.graphics.Shader
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import com.example.heroquest.entity.AnimState
 import com.example.heroquest.entity.Enemy
 import com.example.heroquest.entity.ParticleSystem
 import com.example.heroquest.entity.Platform
@@ -31,8 +32,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
 
     private lateinit var player: Player
     private val enemies = mutableListOf<Enemy>()
+    private var boss: Boss? = null
     private val platforms = mutableListOf<Platform>()
     private var levelEndX = 0f
+    private var currentLevelNumber = 1
     private val particles = ParticleSystem()
     private data class GlowBlob(val worldX: Float, val y: Float, val radius: Float, val color: Int)
     private val ambientGlows = mutableListOf<GlowBlob>()
@@ -40,6 +43,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     private lateinit var joystick: VirtualJoystick
     private lateinit var jumpButton: TouchButton
     private lateinit var attackButton: TouchButton
+    private lateinit var dashButton: TouchButton
 
     private var cameraX = 0f
     private var state = GameState.READY
@@ -49,10 +53,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
 
     private val playerGlowColor = 0xFFE8B84B.toInt()
     private val enemyGlowColor = 0xFFB04A4A.toInt()
+    private val bossGlowColor = 0xFF8C3FA8.toInt()
 
     private val skylinePaint = Paint().apply { color = Color.parseColor("#3D3250") }
     private val hpBarBgPaint = Paint().apply { color = Color.parseColor("#3D2F5C") }
     private val hpBarFillPaint = Paint().apply { color = Color.parseColor("#E84B4B") }
+    private val bossHpFillPaint = Paint().apply { color = Color.parseColor("#8C3FA8") }
     private val textPaint = Paint().apply {
         color = Color.WHITE; isAntiAlias = true; textAlign = Paint.Align.CENTER
         typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT_BOLD, android.graphics.Typeface.BOLD)
@@ -117,21 +123,30 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     }
 
     private fun setupLevel() {
+        val levelData = LevelRoster.byLevelNumber(currentLevelNumber)
+
         platforms.clear()
-        // One long ground platform spanning the whole level, plus a couple of raised
-        // platforms partway through to give the "jump across platforms" feel.
-        levelEndX = screenWidth * 4f
+        levelEndX = screenWidth * levelData.lengthInScreens
         platforms.add(Platform(left = -200f, top = groundY, right = levelEndX, bottom = groundY + 400f))
-        platforms.add(Platform(left = screenWidth * 1.3f, top = groundY - heroHeight * 0.85f, right = screenWidth * 1.7f, bottom = groundY - heroHeight * 0.85f + 40f))
-        platforms.add(Platform(left = screenWidth * 2.1f, top = groundY - heroHeight * 1.15f, right = screenWidth * 2.45f, bottom = groundY - heroHeight * 1.15f + 40f))
+        for (spec in levelData.platformSpecs) {
+            val platformWidth = levelEndX * spec.widthFraction
+            val platformLeft = levelEndX * spec.xFraction - platformWidth / 2f
+            val platformTop = groundY - heroHeight * spec.heightAboveGroundFraction
+            platforms.add(Platform(left = platformLeft, top = platformTop, right = platformLeft + platformWidth, bottom = platformTop + 40f))
+        }
 
         player = Player(startX = screenWidth * 0.15f, startY = groundY, heightPx = heroHeight)
 
         enemies.clear()
-        enemies.add(Enemy(startX = screenWidth * 1.0f, groundY = groundY, heightPx = heroHeight))
-        enemies.add(Enemy(startX = screenWidth * 1.9f, groundY = groundY, heightPx = heroHeight))
-        enemies.add(Enemy(startX = screenWidth * 3.0f, groundY = groundY, heightPx = heroHeight))
-        enemies.add(Enemy(startX = screenWidth * 3.5f, groundY = groundY, heightPx = heroHeight))
+        for (spawn in levelData.enemySpawns) {
+            enemies.add(Enemy(startX = levelEndX * spawn.xFraction, groundY = groundY, heightPx = heroHeight))
+        }
+
+        boss = if (levelData.hasBoss) {
+            Boss(startX = levelEndX * 0.7f, groundY = groundY, heightPx = heroHeight * 1.4f)
+        } else {
+            null
+        }
 
         particles.clear()
         ambientGlows.clear()
@@ -168,6 +183,16 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
             centerY = screenHeight - margin - buttonRadius * 1.4f,
             radius = buttonRadius * 0.85f, label = "JUMP", color = Color.parseColor("#4B9CE8")
         )
+        // DASH sits directly above JUMP (same centerX, smaller centerY i.e. higher
+        // up the screen), far enough vertically that their circles don't overlap:
+        // vertical gap = (3.6 - 1.4) * buttonRadius = 2.2 * buttonRadius, while the
+        // sum of their radii is only (0.85 + 0.75) * buttonRadius = 1.6 * buttonRadius.
+        // 2.2 > 1.6, so there's a real gap, not just a non-overlap by coincidence.
+        dashButton = TouchButton(
+            centerX = screenWidth - margin - buttonRadius * 3.4f,
+            centerY = screenHeight - margin - buttonRadius * 3.6f,
+            radius = buttonRadius * 0.75f, label = "DASH", color = Color.parseColor("#5CC76A")
+        )
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -190,6 +215,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
                 joystick.endTouch(pointerId)
                 jumpButton.release(pointerId)
                 attackButton.release(pointerId)
+                dashButton.release(pointerId)
             }
             MotionEvent.ACTION_CANCEL -> {
                 for (i in 0 until event.pointerCount) {
@@ -197,6 +223,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
                     joystick.endTouch(pointerId)
                     jumpButton.release(pointerId)
                     attackButton.release(pointerId)
+                    dashButton.release(pointerId)
                 }
             }
         }
@@ -212,6 +239,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
             joystick.isWithinActivationRange(x, y) -> joystick.startTouch(pointerId, x, y)
             jumpButton.isWithinRange(x, y) -> jumpButton.press(pointerId)
             attackButton.isWithinRange(x, y) -> attackButton.press(pointerId)
+            dashButton.isWithinRange(x, y) -> dashButton.press(pointerId)
         }
     }
 
@@ -235,12 +263,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         val moveInput = joystick.horizontalValue()
         val jumpPressedThisFrame = jumpButton.consumePendingPress()
         val attackPressedThisFrame = attackButton.consumePendingPress()
+        val dashPressedThisFrame = dashButton.consumePendingPress()
 
-        player.update(dt, moveInput, jumpPressedThisFrame, attackPressedThisFrame, platforms)
+        player.update(dt, moveInput, jumpPressedThisFrame, attackPressedThisFrame, dashPressedThisFrame, platforms)
 
         for (enemy in enemies) {
             enemy.update(dt, player.x, player.isAlive)
         }
+        boss?.update(dt, player.x, player.isAlive)
 
         resolveCombat()
 
@@ -249,8 +279,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
 
         if (!player.isAlive) {
             state = GameState.GAME_OVER
-        } else if (enemies.all { !it.isAlive } && player.x >= levelEndX - screenWidth * 0.5f) {
-            state = GameState.VICTORY
+        } else {
+            val regularEnemiesCleared = enemies.all { !it.isAlive }
+            val bossCleared = boss?.let { !it.isAlive } ?: true // true if there's no boss this level
+            if (regularEnemiesCleared && bossCleared && player.x >= levelEndX - screenWidth * 0.5f) {
+                state = GameState.VICTORY
+            }
         }
     }
 
@@ -260,19 +294,49 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
             for (enemy in enemies) {
                 if (enemy.isAlive && enemy.bounds().intersects(playerAttackBox)) {
                     val wasAlive = enemy.isAlive
-                    enemy.takeDamage(18)
+                    val isFinisher = player.currentState() == AnimState.FINISHER
+                    enemy.takeDamage(player.currentMoveDamage())
                     player.markAttackLanded()
 
                     val hand = player.rig.leadHandWorldOffset(player.currentState())
                     val sparkX = if (hand != null) player.x + hand.first else enemy.x
                     val sparkY = if (hand != null) player.y + hand.second else enemy.y - heroHeight * 0.5f
                     particles.emitHitSpark(sparkX, sparkY, playerGlowColor)
-                    triggerShake(0.15f, 10f)
+                    if (isFinisher) {
+                        particles.emitHitSpark(sparkX, sparkY, 0xFFFFD23F.toInt())
+                        triggerShake(0.22f, 16f)
+                    } else {
+                        triggerShake(0.15f, 10f)
+                    }
 
                     if (wasAlive && !enemy.isAlive) {
                         particles.emitDefeatBurst(enemy.x, enemy.y - heroHeight * 0.5f, enemyGlowColor)
                         triggerShake(0.25f, 18f)
                     }
+                }
+            }
+
+            val currentBoss = boss
+            if (currentBoss != null && currentBoss.isAlive && currentBoss.bounds().intersects(playerAttackBox)) {
+                val wasAlive = currentBoss.isAlive
+                val isFinisher = player.currentState() == AnimState.FINISHER
+                currentBoss.takeDamage(player.currentMoveDamage())
+                player.markAttackLanded()
+
+                val hand = player.rig.leadHandWorldOffset(player.currentState())
+                val sparkX = if (hand != null) player.x + hand.first else currentBoss.x
+                val sparkY = if (hand != null) player.y + hand.second else currentBoss.y - heroHeight * 0.7f
+                particles.emitHitSpark(sparkX, sparkY, playerGlowColor)
+                if (isFinisher) {
+                    particles.emitHitSpark(sparkX, sparkY, 0xFFFFD23F.toInt())
+                    triggerShake(0.22f, 16f)
+                } else {
+                    triggerShake(0.15f, 10f)
+                }
+
+                if (wasAlive && !currentBoss.isAlive) {
+                    particles.emitDefeatBurst(currentBoss.x, currentBoss.y - heroHeight * 0.7f, bossGlowColor)
+                    triggerShake(0.4f, 26f)
                 }
             }
         }
@@ -286,6 +350,17 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
                     particles.emitHitSpark(player.x, player.y - heroHeight * 0.5f, enemyGlowColor)
                     triggerShake(0.18f, 14f)
                 }
+            }
+        }
+
+        val currentBoss = boss
+        if (currentBoss != null && player.isAlive) {
+            val bossAttackBox = currentBoss.attackHitbox()
+            if (bossAttackBox != null && !currentBoss.hasAttackLanded() && player.bounds().intersects(bossAttackBox)) {
+                player.takeDamage(currentBoss.currentMoveDamage())
+                currentBoss.markAttackLanded()
+                particles.emitHitSpark(player.x, player.y - heroHeight * 0.5f, bossGlowColor)
+                triggerShake(0.22f, 18f)
             }
         }
     }
@@ -332,6 +407,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
 
         for (platform in platforms) platform.draw(canvas, cameraX)
         for (enemy in enemies) enemy.draw(canvas, cameraX)
+        boss?.draw(canvas, cameraX)
         player.draw(canvas, cameraX)
         particles.draw(canvas, cameraX)
 
@@ -347,6 +423,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
                 joystick.draw(canvas)
                 jumpButton.draw(canvas)
                 attackButton.draw(canvas)
+                dashButton.draw(canvas)
             }
         }
     }
@@ -361,8 +438,18 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         val hpFraction = player.currentHp.toFloat() / player.maxHp.toFloat()
         canvas.drawRect(barX, barY, barX + barWidth * hpFraction, barY + barHeight, hpBarFillPaint)
 
-        val remainingEnemies = enemies.count { it.isAlive }
-        canvas.drawText("Enemies remaining: $remainingEnemies", screenWidth * 0.5f, screenHeight * 0.06f, textPaint)
+        val currentBoss = boss
+        if (currentBoss != null) {
+            val bossBarWidth = screenWidth * 0.4f
+            val bossBarX = screenWidth - screenWidth * 0.03f - bossBarWidth
+            canvas.drawRect(bossBarX, barY, bossBarX + bossBarWidth, barY + barHeight, hpBarBgPaint)
+            val bossHpFraction = currentBoss.currentHp.toFloat() / currentBoss.maxHp.toFloat()
+            canvas.drawRect(bossBarX, barY, bossBarX + bossBarWidth * bossHpFraction, barY + barHeight, bossHpFillPaint)
+            canvas.drawText("BOSS", bossBarX + bossBarWidth / 2f, barY - screenHeight * 0.01f, textPaint)
+        } else {
+            val remainingEnemies = enemies.count { it.isAlive }
+            canvas.drawText("Enemies remaining: $remainingEnemies", screenWidth * 0.5f, screenHeight * 0.06f, textPaint)
+        }
     }
 
     private fun drawOverlay(canvas: Canvas, title: String, subtitle: String) {

@@ -5,7 +5,11 @@ enum class AnimState {
     RUN,
     JUMP,
     FALL,
-    ATTACK,
+    PUNCH,
+    KICK,
+    JUMP_ATTACK,
+    DASH,
+    FINISHER,
     HIT,
     DEFEATED
 }

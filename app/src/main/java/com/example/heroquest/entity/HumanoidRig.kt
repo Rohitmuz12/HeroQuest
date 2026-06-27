@@ -56,21 +56,35 @@ class HumanoidRig(
             else -> 4f
         }
 
-        if (state == AnimState.ATTACK) {
-            // Reset the attack swing timer exactly once, the frame the attack starts —
+        if (isActionState(state)) {
+            // Reset the action timer exactly once, the frame this action starts —
             // NOT animTime, which keeps running continuously across every other state
             // and would otherwise already be far past the swing's useful sin() range
-            // by the time an attack begins, making the swing invisible.
-            if (previousState != AnimState.ATTACK) {
+            // by the time an action begins, making the motion invisible. This bug
+            // bit the original single-attack version; every action state added since
+            // must go through this same reset-on-entry timer, never animTime directly.
+            //
+            // attackAnimTime tracks RAW elapsed seconds since the action began (not
+            // pre-scaled), so each pose formula below normalizes it against that
+            // move's own actual duration. A shared pre-scaled constant here would
+            // silently desync once two different entities (e.g. Player's finisher at
+            // 0.55s vs Boss's slam at ~1.0s) use the same AnimState with different
+            // real durations — which is exactly what happened before this was fixed.
+            if (previousState != state) {
                 attackAnimTime = 0f
             }
-            attackAnimTime += dt * 14f
+            attackAnimTime += dt
         } else {
             animTime += dt * cycleSpeed
         }
 
         previousState = state
         glowPulseTime += dt * 3f
+    }
+
+    private fun isActionState(state: AnimState): Boolean {
+        return state == AnimState.PUNCH || state == AnimState.KICK ||
+            state == AnimState.JUMP_ATTACK || state == AnimState.DASH || state == AnimState.FINISHER
     }
 
     fun draw(canvas: Canvas, state: AnimState) {
@@ -82,8 +96,8 @@ class HumanoidRig(
         val centerY = (torsoTopY + hipYAdjusted) / 2f
 
         // Outer glow: a soft radial halo behind the whole figure. Pulses gently at
-        // idle, holds a brighter steady glow during an attack for impact.
-        val glowStrength = if (state == AnimState.ATTACK) 1f else 0.7f + 0.3f * sin(glowPulseTime)
+        // idle, holds a brighter steady glow during an action for impact.
+        val glowStrength = if (isActionState(state)) 1f else 0.7f + 0.3f * sin(glowPulseTime)
         val glowRadius = heightPx * 0.7f * (0.9f + 0.15f * glowStrength)
         glowPaint.shader = RadialGradient(
             pose.torsoLean, centerY, glowRadius,
@@ -130,9 +144,9 @@ class HumanoidRig(
         return (color and 0x00FFFFFF) or (clampedAlpha shl 24)
     }
 
-    /** Returns the hand/weapon-tip position of the leading attack arm, for trail/spark effects. */
+    /** Returns the hand/foot/weapon-tip position of the active move, for trail/spark effects. */
     fun leadHandWorldOffset(state: AnimState): Pair<Float, Float>? {
-        if (state != AnimState.ATTACK) return null
+        if (!isActionState(state)) return null
         val dir = if (facingRight) 1f else -1f
         val pose = poseFor(state, dir)
         val torsoTopY = shoulderY + pose.bob
@@ -179,14 +193,59 @@ class HumanoidRig(
                 leftLeg = -10f * dir, rightLeg = 15f * dir,
                 torsoLean = -4f * dir, bob = 0f
             )
-            AnimState.ATTACK -> {
-                // Fast forward swing on the lead arm, driven by a sharp sin curve for snap.
-                val swing = sin(attackAnimTime.coerceAtMost(Math.PI.toFloat())) * 90f
+            AnimState.PUNCH -> {
+                // Fast forward swing on the lead arm. Normalized against ~0.18s to
+                // peak — quick enough that even the longest real PUNCH duration in
+                // use (Boss: 0.4s) still completes the swing well before the move ends,
+                // rather than holding mid-swing as if frozen.
+                val swing = sin((attackAnimTime / 0.18f).coerceAtMost(Math.PI.toFloat())) * 90f
                 Pose(
                     leftArm = if (dir > 0) swing else -20f * dir,
                     rightArm = if (dir > 0) -20f * dir else swing,
                     leftLeg = 8f * dir, rightLeg = -8f * dir,
                     torsoLean = 10f * dir, bob = 0f
+                )
+            }
+            AnimState.KICK -> {
+                // A sharp forward leg swing, body leaning back for balance/reach.
+                val swing = sin((attackAnimTime / 0.2f).coerceAtMost(Math.PI.toFloat())) * 75f
+                Pose(
+                    leftArm = -25f * dir, rightArm = 35f * dir,
+                    leftLeg = if (dir > 0) swing else -12f * dir,
+                    rightLeg = if (dir > 0) -12f * dir else swing,
+                    torsoLean = -8f * dir, bob = 0f
+                )
+            }
+            AnimState.JUMP_ATTACK -> {
+                // Both arms driven downward together, like a hammer-fist coming down.
+                val swing = sin((attackAnimTime / 0.22f).coerceAtMost(Math.PI.toFloat())) * 70f
+                Pose(
+                    leftArm = -60f + swing * 0.4f, rightArm = -60f + swing * 0.4f,
+                    leftLeg = 20f * dir, rightLeg = -10f * dir,
+                    torsoLean = 6f * dir, bob = -heightPx * 0.05f
+                )
+            }
+            AnimState.DASH -> {
+                // Low, forward-leaning sprint pose — more extreme than a normal run stride.
+                Pose(
+                    leftArm = -45f * dir, rightArm = 45f * dir,
+                    leftLeg = 40f * dir, rightLeg = -40f * dir,
+                    torsoLean = 20f * dir, bob = -heightPx * 0.02f
+                )
+            }
+            AnimState.FINISHER -> {
+                // A bigger, slower wind-up-then-release swing. Normalized against 1.0s
+                // so it correctly spans the boss's combined telegraph+strike duration
+                // (0.5s + 0.5s); the player's shorter 0.55s finisher will simply show
+                // a slightly-compressed but still complete version of the same curve,
+                // which reads fine since it's a deliberately bigger, slower move anyway.
+                val phase = (attackAnimTime / 1.0f).coerceIn(0f, 1f) * (Math.PI.toFloat() * 2f)
+                val swing = sin(phase) * 130f
+                Pose(
+                    leftArm = if (dir > 0) swing else -40f * dir,
+                    rightArm = if (dir > 0) -40f * dir else swing,
+                    leftLeg = 15f * dir, rightLeg = -15f * dir,
+                    torsoLean = 18f * dir, bob = 0f
                 )
             }
             AnimState.HIT -> Pose(
