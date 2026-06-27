@@ -77,6 +77,30 @@ class ParticleSystem {
         }
     }
 
+    /**
+     * Spawns a couple of quick-fading particles at the character's current
+     * position, intended to be called every frame during a dash. Spawned with
+     * near-zero velocity (a slight drift opposite the dash direction) so they
+     * stay roughly where they were created and fade out — the rapid sequence
+     * of fading marks left behind reads as a motion streak/trail.
+     */
+    fun emitDashTrail(x: Float, y: Float, color: Int, dashDirX: Float) {
+        repeat(2) {
+            particles.add(
+                Particle(
+                    x = x + (Random.nextFloat() - 0.5f) * 12f,
+                    y = y + (Random.nextFloat() - 0.5f) * 12f,
+                    vx = -dashDirX * (40f + Random.nextFloat() * 40f),
+                    vy = (Random.nextFloat() - 0.5f) * 20f,
+                    life = 0.18f + Random.nextFloat() * 0.08f,
+                    maxLife = 0.26f,
+                    radius = Random.nextFloat() * 8f + 6f,
+                    color = color
+                )
+            )
+        }
+    }
+
     fun update(dt: Float) {
         val iterator = particles.iterator()
         while (iterator.hasNext()) {

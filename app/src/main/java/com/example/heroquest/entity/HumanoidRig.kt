@@ -18,7 +18,8 @@ import kotlin.math.sin
 class HumanoidRig(
     private val bodyColor: Int,
     private val limbColor: Int,
-    private val heightPx: Float
+    private val heightPx: Float,
+    private val hasWeapon: Boolean = false
 ) {
     private var animTime = 0f
     private var attackAnimTime = 0f
@@ -34,6 +35,8 @@ class HumanoidRig(
     private val headPaint = Paint().apply { color = bodyColor; isAntiAlias = true }
     private val highlightPaint = Paint().apply { color = 0x55FFFFFF.toInt(); isAntiAlias = true }
     private val glowPaint = Paint().apply { isAntiAlias = true }
+    private val swordBladePaint = Paint().apply { color = 0xFFD8D8E8.toInt(); isAntiAlias = true; strokeWidth = heightPx * 0.06f; strokeCap = Paint.Cap.ROUND }
+    private val swordHiltPaint = Paint().apply { color = 0xFF8C7038.toInt(); isAntiAlias = true; strokeWidth = heightPx * 0.09f; strokeCap = Paint.Cap.ROUND }
 
     // Proportions, scaled off overall height so the rig scales cleanly with heightPx.
     private val headRadius = heightPx * 0.14f
@@ -42,6 +45,7 @@ class HumanoidRig(
     private val lowerLimbLength = heightPx * 0.18f
     private val hipY = -heightPx * 0.36f       // hip joint height above feet
     private val shoulderY = hipY - torsoLength  // shoulder joint height above feet
+    private val swordLength = heightPx * 0.42f
 
     fun setFacing(right: Boolean) {
         facingRight = right
@@ -84,7 +88,13 @@ class HumanoidRig(
 
     private fun isActionState(state: AnimState): Boolean {
         return state == AnimState.PUNCH || state == AnimState.KICK ||
-            state == AnimState.JUMP_ATTACK || state == AnimState.DASH || state == AnimState.FINISHER
+            state == AnimState.JUMP_ATTACK || state == AnimState.DASH ||
+            state == AnimState.AIR_DASH || state == AnimState.FINISHER
+    }
+
+    /** True for moves where the lead hand should be drawn holding a sword, when this rig hasWeapon. */
+    private fun isSwordSwingState(state: AnimState): Boolean {
+        return hasWeapon && (state == AnimState.PUNCH || state == AnimState.JUMP_ATTACK || state == AnimState.FINISHER)
     }
 
     fun draw(canvas: Canvas, state: AnimState) {
@@ -113,9 +123,19 @@ class HumanoidRig(
         drawLimb(canvas, 0f, hipYAdjusted, pose.leftLeg, upperLimbLength, lowerLimbLength, limbPaint)
         drawLimb(canvas, 0f, hipYAdjusted, pose.rightLeg, upperLimbLength, lowerLimbLength, limbPaint)
 
-        // Arms: shoulder -> elbow -> hand
-        drawLimb(canvas, pose.torsoLean, torsoTopY, pose.leftArm, upperLimbLength * 0.9f, lowerLimbLength * 0.9f, limbPaint)
-        drawLimb(canvas, pose.torsoLean, torsoTopY, pose.rightArm, upperLimbLength * 0.9f, lowerLimbLength * 0.9f, limbPaint)
+        // Arms: shoulder -> elbow -> hand. The lead (swinging) arm is determined by
+        // facing direction; we draw the rear arm first so the lead arm (and any
+        // weapon on it) renders on top, reading clearly as the foreground motion.
+        val leadIsLeft = dir > 0
+        val rearArmAngle = if (leadIsLeft) pose.rightArm else pose.leftArm
+        val leadArmAngle = if (leadIsLeft) pose.leftArm else pose.rightArm
+
+        val rearHand = drawLimb(canvas, pose.torsoLean, torsoTopY, rearArmAngle, upperLimbLength * 0.9f, lowerLimbLength * 0.9f, limbPaint)
+        val leadHand = drawLimb(canvas, pose.torsoLean, torsoTopY, leadArmAngle, upperLimbLength * 0.9f, lowerLimbLength * 0.9f, limbPaint)
+
+        if (isSwordSwingState(state)) {
+            drawSword(canvas, leadHand.first, leadHand.second, leadArmAngle)
+        }
 
         // Head, sitting atop the torso, drawn after limbs so it's never occluded
         val headCenterY = torsoTopY - headRadius * 1.1f
@@ -124,8 +144,36 @@ class HumanoidRig(
         canvas.drawCircle(pose.torsoLean - headRadius * 0.3f, headCenterY - headRadius * 0.3f, headRadius * 0.32f, highlightPaint)
     }
 
-    /** Draws a 2-segment capsule limb (e.g. thigh+shin or upper arm+forearm), bending toward `angleDeg` from straight down. */
-    private fun drawLimb(canvas: Canvas, originX: Float, originY: Float, angleDeg: Float, upperLen: Float, lowerLen: Float, paint: Paint) {
+    /** Draws the sword blade+hilt extending from the hand, oriented along the arm's swing angle. */
+    private fun drawSword(canvas: Canvas, handX: Float, handY: Float, armAngleDeg: Float) {
+        // The blade points further in the swing direction than the arm itself bent,
+        // exaggerating the angle slightly so the sword visibly leads the strike
+        // rather than just dangling parallel to the forearm.
+        val bladeAngleDeg = armAngleDeg * 1.5f
+        val rad = Math.toRadians(bladeAngleDeg.toDouble())
+        val tipX = handX + sin(rad).toFloat() * swordLength
+        val tipY = handY + kotlin.math.cos(rad).toFloat() * swordLength
+        val hiltBackX = handX - sin(rad).toFloat() * swordLength * 0.15f
+        val hiltBackY = handY - kotlin.math.cos(rad).toFloat() * swordLength * 0.15f
+
+        canvas.drawLine(hiltBackX, hiltBackY, handX, handY, swordHiltPaint)
+        canvas.drawLine(handX, handY, tipX, tipY, swordBladePaint)
+    }
+
+    /** Draws a 2-segment capsule limb (e.g. thigh+shin or upper arm+forearm), bending toward `angleDeg` from straight down. Returns the endpoint (hand/foot position). */
+    private fun drawLimb(canvas: Canvas, originX: Float, originY: Float, angleDeg: Float, upperLen: Float, lowerLen: Float, paint: Paint): Pair<Float, Float> {
+        val endpoint = limbEndpoint(originX, originY, angleDeg, upperLen, lowerLen)
+        val rad = Math.toRadians(angleDeg.toDouble())
+        val midX = originX + sin(rad).toFloat() * upperLen
+        val midY = originY + kotlin.math.cos(rad).toFloat() * upperLen
+
+        canvas.drawLine(originX, originY, midX, midY, paint)
+        canvas.drawLine(midX, midY, endpoint.first, endpoint.second, paint)
+        return endpoint
+    }
+
+    /** Pure math version of drawLimb's endpoint calculation, with no drawing — used by both drawLimb and leadHandWorldOffset so the formula lives in exactly one place. */
+    private fun limbEndpoint(originX: Float, originY: Float, angleDeg: Float, upperLen: Float, lowerLen: Float): Pair<Float, Float> {
         val rad = Math.toRadians(angleDeg.toDouble())
         val midX = originX + sin(rad).toFloat() * upperLen
         val midY = originY + kotlin.math.cos(rad).toFloat() * upperLen
@@ -133,9 +181,7 @@ class HumanoidRig(
         val lowerRad = Math.toRadians((angleDeg * 1.3f).toDouble())
         val endX = midX + sin(lowerRad).toFloat() * lowerLen
         val endY = midY + kotlin.math.cos(lowerRad).toFloat() * lowerLen
-
-        canvas.drawLine(originX, originY, midX, midY, paint)
-        canvas.drawLine(midX, midY, endX, endY, paint)
+        return Pair(endX, endY)
     }
 
     /** Returns `color` with its alpha channel replaced by `alpha` (0-255), used for the glow gradient. */
@@ -151,15 +197,18 @@ class HumanoidRig(
         val pose = poseFor(state, dir)
         val torsoTopY = shoulderY + pose.bob
         val leadArmAngle = if (dir > 0) pose.leftArm else pose.rightArm
-        val rad = Math.toRadians(leadArmAngle.toDouble())
-        val lowerRad = Math.toRadians((leadArmAngle * 1.3f).toDouble())
-        val upperLen = upperLimbLength * 0.9f
-        val lowerLen = lowerLimbLength * 0.9f
-        val midX = pose.torsoLean + sin(rad).toFloat() * upperLen
-        val midY = torsoTopY + kotlin.math.cos(rad).toFloat() * upperLen
-        val endX = midX + sin(lowerRad).toFloat() * lowerLen
-        val endY = midY + kotlin.math.cos(lowerRad).toFloat() * lowerLen
-        return Pair(endX, endY)
+        val hand = limbEndpoint(pose.torsoLean, torsoTopY, leadArmAngle, upperLimbLength * 0.9f, lowerLimbLength * 0.9f)
+
+        if (isSwordSwingState(state)) {
+            // Report the sword tip, not the bare hand — effects should originate from
+            // where the blade actually is, matching what drawSword() renders.
+            val bladeAngleDeg = leadArmAngle * 1.5f
+            val rad = Math.toRadians(bladeAngleDeg.toDouble())
+            val tipX = hand.first + sin(rad).toFloat() * swordLength
+            val tipY = hand.second + kotlin.math.cos(rad).toFloat() * swordLength
+            return Pair(tipX, tipY)
+        }
+        return hand
     }
 
     /**
@@ -198,22 +247,32 @@ class HumanoidRig(
                 // peak — quick enough that even the longest real PUNCH duration in
                 // use (Boss: 0.4s) still completes the swing well before the move ends,
                 // rather than holding mid-swing as if frozen.
-                val swing = sin((attackAnimTime / 0.18f).coerceAtMost(Math.PI.toFloat())) * 90f
+                val swingProgress = (attackAnimTime / 0.18f).coerceAtMost(Math.PI.toFloat())
+                val swing = sin(swingProgress) * 90f
+                // The rear arm counter-rotates backward as the lead arm drives forward —
+                // real punches pull the off-hand back for balance/torque, not just a
+                // static fixed angle regardless of how far into the swing we are.
+                val counterSwing = -sin(swingProgress) * 55f
                 Pose(
-                    leftArm = if (dir > 0) swing else -20f * dir,
-                    rightArm = if (dir > 0) -20f * dir else swing,
-                    leftLeg = 8f * dir, rightLeg = -8f * dir,
-                    torsoLean = 10f * dir, bob = 0f
+                    leftArm = if (dir > 0) swing else counterSwing * dir,
+                    rightArm = if (dir > 0) counterSwing * dir else swing,
+                    leftLeg = 10f * dir, rightLeg = -10f * dir,
+                    torsoLean = 16f * dir, bob = 0f
                 )
             }
             AnimState.KICK -> {
                 // A sharp forward leg swing, body leaning back for balance/reach.
-                val swing = sin((attackAnimTime / 0.2f).coerceAtMost(Math.PI.toFloat())) * 75f
+                val swingProgress = (attackAnimTime / 0.2f).coerceAtMost(Math.PI.toFloat())
+                val swing = sin(swingProgress) * 75f
+                // Hips counter-rotate opposite the kicking leg, and the arms swing
+                // for balance the way a real kick pivots the whole body, not just the leg.
+                val hipCounter = -sin(swingProgress) * 20f
                 Pose(
-                    leftArm = -25f * dir, rightArm = 35f * dir,
-                    leftLeg = if (dir > 0) swing else -12f * dir,
-                    rightLeg = if (dir > 0) -12f * dir else swing,
-                    torsoLean = -8f * dir, bob = 0f
+                    leftArm = -25f * dir - sin(swingProgress) * 15f * dir,
+                    rightArm = 35f * dir + sin(swingProgress) * 15f * dir,
+                    leftLeg = if (dir > 0) swing else hipCounter * dir,
+                    rightLeg = if (dir > 0) hipCounter * dir else swing,
+                    torsoLean = -14f * dir, bob = 0f
                 )
             }
             AnimState.JUMP_ATTACK -> {
@@ -233,6 +292,15 @@ class HumanoidRig(
                     torsoLean = 20f * dir, bob = -heightPx * 0.02f
                 )
             }
+            AnimState.AIR_DASH -> {
+                // A streamlined, near-horizontal pose — arms swept back, legs trailing,
+                // reading as "shooting through the air" rather than running in place.
+                Pose(
+                    leftArm = -70f * dir, rightArm = -70f * dir,
+                    leftLeg = -25f * dir, rightLeg = -35f * dir,
+                    torsoLean = 35f * dir, bob = -heightPx * 0.1f
+                )
+            }
             AnimState.FINISHER -> {
                 // A bigger, slower wind-up-then-release swing. Normalized against 1.0s
                 // so it correctly spans the boss's combined telegraph+strike duration
@@ -241,11 +309,15 @@ class HumanoidRig(
                 // which reads fine since it's a deliberately bigger, slower move anyway.
                 val phase = (attackAnimTime / 1.0f).coerceIn(0f, 1f) * (Math.PI.toFloat() * 2f)
                 val swing = sin(phase) * 130f
+                // Torso lean follows the same curve, exaggerated, so the whole body
+                // visibly winds back before committing weight into the strike —
+                // a real weight-shift, not just an arm moving in isolation.
+                val torsoShift = sin(phase) * 28f
                 Pose(
                     leftArm = if (dir > 0) swing else -40f * dir,
                     rightArm = if (dir > 0) -40f * dir else swing,
                     leftLeg = 15f * dir, rightLeg = -15f * dir,
-                    torsoLean = 18f * dir, bob = 0f
+                    torsoLean = torsoShift * dir, bob = 0f
                 )
             }
             AnimState.HIT -> Pose(

@@ -32,6 +32,8 @@ class Player(startX: Float, startY: Float, private val heightPx: Float) {
     private val moveSpeed = 420f
     private val dashSpeed = 1100f
     private val dashDuration = 0.22f
+    private val airDashSpeed = 1300f
+    private val airDashDuration = 0.28f
 
     var isOnGround = false
         private set
@@ -66,7 +68,7 @@ class Player(startX: Float, startY: Float, private val heightPx: Float) {
     private val comboWindow = 0.9f // seconds allowed between hits before the combo resets
     private val comboCountForFinisher = 3
 
-    val rig = HumanoidRig(bodyColor = 0xFFE8B84B.toInt(), limbColor = 0xFFB88A2E.toInt(), heightPx = heightPx)
+    val rig = HumanoidRig(bodyColor = 0xFFE8B84B.toInt(), limbColor = 0xFFB88A2E.toInt(), heightPx = heightPx, hasWeapon = true)
 
     val width = heightPx * 0.32f // approximate body width for collision
 
@@ -131,7 +133,7 @@ class Player(startX: Float, startY: Float, private val heightPx: Float) {
 
     private fun isActionState(s: AnimState): Boolean {
         return s == AnimState.PUNCH || s == AnimState.KICK || s == AnimState.JUMP_ATTACK ||
-            s == AnimState.DASH || s == AnimState.FINISHER
+            s == AnimState.DASH || s == AnimState.AIR_DASH || s == AnimState.FINISHER
     }
 
     private fun durationFor(s: AnimState): Float = when (s) {
@@ -139,6 +141,7 @@ class Player(startX: Float, startY: Float, private val heightPx: Float) {
         AnimState.KICK -> kickDuration
         AnimState.JUMP_ATTACK -> jumpAttackDuration
         AnimState.DASH -> dashDuration
+        AnimState.AIR_DASH -> airDashDuration
         AnimState.FINISHER -> finisherDuration
         else -> 0f
     }
@@ -173,11 +176,18 @@ class Player(startX: Float, startY: Float, private val heightPx: Float) {
                 actionTimer = 0f
                 actionHasHit = false
             } else if (state == AnimState.DASH) {
-                // Dash moves the player directly rather than going through the normal
-                // moveInput->velocityX path, so it covers ground at a fixed burst speed
-                // regardless of joystick position during the dash.
+                // Ground dash moves the player directly rather than going through the
+                // normal moveInput->velocityX path, so it covers ground at a fixed burst
+                // speed regardless of joystick position during the dash.
                 val dashDir = if (rig.facingRight) 1f else -1f
                 velocityX = dashDir * dashSpeed
+            } else if (state == AnimState.AIR_DASH) {
+                // Air dash also zeroes vertical velocity each frame it's active, so it
+                // reads as a deliberate horizontal burst through the air rather than
+                // just "running while still falling under normal gravity."
+                val dashDir = if (rig.facingRight) 1f else -1f
+                velocityX = dashDir * airDashSpeed
+                velocityY = 0f
             }
         } else if (state == AnimState.HIT) {
             actionTimer += dt
@@ -198,7 +208,7 @@ class Player(startX: Float, startY: Float, private val heightPx: Float) {
             }
 
             if (dashPressed) {
-                state = AnimState.DASH
+                state = if (isOnGround) AnimState.DASH else AnimState.AIR_DASH
                 actionTimer = 0f
                 actionHasHit = false
             } else if (attackPressed) {

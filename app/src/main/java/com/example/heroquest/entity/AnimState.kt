@@ -9,6 +9,7 @@ enum class AnimState {
     KICK,
     JUMP_ATTACK,
     DASH,
+    AIR_DASH,
     FINISHER,
     HIT,
     DEFEATED

@@ -268,6 +268,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
 
         player.update(dt, moveInput, jumpPressedThisFrame, attackPressedThisFrame, dashPressedThisFrame, platforms)
 
+        if (player.currentState() == AnimState.DASH || player.currentState() == AnimState.AIR_DASH) {
+            val dashDirX = if (player.rig.facingRight) 1f else -1f
+            particles.emitDashTrail(player.x, player.y - heroHeight * 0.5f, playerGlowColor, dashDirX)
+        }
+
         for (enemy in enemies) {
             enemy.update(dt, player.x, player.isAlive)
         }
