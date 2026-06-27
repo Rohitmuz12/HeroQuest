@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.RadialGradient
+import android.graphics.RectF
 import android.graphics.Shader
 import android.view.MotionEvent
 import android.view.SurfaceHolder
@@ -20,7 +21,7 @@ import com.example.heroquest.input.TouchButton
 import com.example.heroquest.input.VirtualJoystick
 import kotlin.random.Random
 
-enum class GameState { READY, PLAYING, GAME_OVER, VICTORY }
+enum class GameState { MAIN_MENU, STORY_INTRO, PLAYING, STORY_OUTRO, GAME_OVER, VICTORY }
 
 class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback {
 
@@ -41,13 +42,19 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     private data class GlowBlob(val worldX: Float, val y: Float, val radius: Float, val color: Int)
     private val ambientGlows = mutableListOf<GlowBlob>()
 
+    private val saveManager = SaveManager(context)
+    private val soundManager = SoundManager()
+    private var previousPlayerState = AnimState.IDLE
+
     private lateinit var joystick: VirtualJoystick
     private lateinit var jumpButton: TouchButton
     private lateinit var attackButton: TouchButton
     private lateinit var dashButton: TouchButton
+    private var playButtonBounds = RectF()
+    private var continueButtonBounds = RectF()
 
     private var cameraX = 0f
-    private var state = GameState.READY
+    private var state = GameState.MAIN_MENU
 
     private var shakeTime = 0f
     private var shakeMagnitude = 0f
@@ -88,7 +95,6 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
             )
         }
 
-        setupLevel()
         setupControls()
 
         textPaint.textSize = screenWidth * 0.025f
@@ -109,6 +115,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
                 retry = false
             } catch (e: InterruptedException) { }
         }
+        soundManager.release()
     }
 
     fun resume() {
@@ -194,6 +201,19 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
             centerY = screenHeight - margin - buttonRadius * 3.6f,
             radius = buttonRadius * 0.75f, label = "DASH", color = Color.parseColor("#5CC76A")
         )
+
+        // Main menu button bounds — centered rectangles, Play above Continue.
+        val menuButtonWidth = screenWidth * 0.28f
+        val menuButtonHeight = screenHeight * 0.13f
+        val menuButtonCenterX = screenWidth / 2f
+        playButtonBounds = RectF(
+            menuButtonCenterX - menuButtonWidth / 2f, screenHeight * 0.5f,
+            menuButtonCenterX + menuButtonWidth / 2f, screenHeight * 0.5f + menuButtonHeight
+        )
+        continueButtonBounds = RectF(
+            menuButtonCenterX - menuButtonWidth / 2f, screenHeight * 0.68f,
+            menuButtonCenterX + menuButtonWidth / 2f, screenHeight * 0.68f + menuButtonHeight
+        )
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -232,22 +252,62 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     }
 
     private fun handlePointerDown(pointerId: Int, x: Float, y: Float) {
-        if (state == GameState.READY || state == GameState.GAME_OVER || state == GameState.VICTORY) {
-            startOrRestartGame()
-            return
-        }
-        when {
-            joystick.isWithinActivationRange(x, y) -> joystick.startTouch(pointerId, x, y)
-            jumpButton.isWithinRange(x, y) -> jumpButton.press(pointerId)
-            attackButton.isWithinRange(x, y) -> attackButton.press(pointerId)
-            dashButton.isWithinRange(x, y) -> dashButton.press(pointerId)
+        when (state) {
+            GameState.MAIN_MENU -> handleMainMenuTap(x, y)
+            GameState.STORY_INTRO -> {
+                soundManager.playButtonTap()
+                state = GameState.PLAYING
+            }
+            GameState.STORY_OUTRO -> {
+                soundManager.playButtonTap()
+                advanceToNextLevelOrFinish()
+            }
+            GameState.GAME_OVER -> {
+                soundManager.playButtonTap()
+                beginLevel(currentLevelNumber) // retry the same level
+            }
+            GameState.VICTORY -> {
+                soundManager.playButtonTap()
+                state = GameState.MAIN_MENU
+            }
+            GameState.PLAYING -> {
+                when {
+                    joystick.isWithinActivationRange(x, y) -> joystick.startTouch(pointerId, x, y)
+                    jumpButton.isWithinRange(x, y) -> jumpButton.press(pointerId)
+                    attackButton.isWithinRange(x, y) -> attackButton.press(pointerId)
+                    dashButton.isWithinRange(x, y) -> dashButton.press(pointerId)
+                }
+            }
         }
     }
 
-    private fun startOrRestartGame() {
+    private fun handleMainMenuTap(x: Float, y: Float) {
+        if (playButtonBounds.contains(x, y)) {
+            soundManager.playButtonTap()
+            beginLevel(1)
+        } else if (saveManager.hasProgress() && continueButtonBounds.contains(x, y)) {
+            soundManager.playButtonTap()
+            beginLevel(saveManager.furthestLevelReached)
+        }
+    }
+
+    /** Starts story mode at the given level: builds the level and shows its intro text first. */
+    private fun beginLevel(levelNumber: Int) {
+        currentLevelNumber = levelNumber
         setupLevel()
         cameraX = 0f
-        state = GameState.PLAYING
+        state = GameState.STORY_INTRO
+    }
+
+    /** Called after the player taps through a level's outro text. */
+    private fun advanceToNextLevelOrFinish() {
+        if (currentLevelNumber >= LevelRoster.totalLevels()) {
+            state = GameState.VICTORY
+            soundManager.playVictory()
+        } else {
+            saveManager.furthestLevelReached = currentLevelNumber + 1
+            beginLevel(currentLevelNumber + 1)
+        }
     }
 
     fun update(dt: Float) {
@@ -268,7 +328,21 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
 
         player.update(dt, moveInput, jumpPressedThisFrame, attackPressedThisFrame, dashPressedThisFrame, platforms)
 
-        if (player.currentState() == AnimState.DASH || player.currentState() == AnimState.AIR_DASH) {
+        val currentPlayerState = player.currentState()
+        if (currentPlayerState != previousPlayerState) {
+            when (currentPlayerState) {
+                AnimState.JUMP -> soundManager.playJump()
+                AnimState.PUNCH -> soundManager.playPunch()
+                AnimState.KICK -> soundManager.playKick()
+                AnimState.FINISHER -> soundManager.playFinisher()
+                AnimState.DASH, AnimState.AIR_DASH -> soundManager.playDash()
+                AnimState.HIT -> soundManager.playHitTaken()
+                else -> { /* no sound for IDLE/RUN/FALL/JUMP_ATTACK/DEFEATED transitions */ }
+            }
+        }
+        previousPlayerState = currentPlayerState
+
+        if (currentPlayerState == AnimState.DASH || currentPlayerState == AnimState.AIR_DASH) {
             val dashDirX = if (player.rig.facingRight) 1f else -1f
             particles.emitDashTrail(player.x, player.y - heroHeight * 0.5f, playerGlowColor, dashDirX)
         }
@@ -285,11 +359,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
 
         if (!player.isAlive) {
             state = GameState.GAME_OVER
+            soundManager.playGameOver()
         } else {
             val regularEnemiesCleared = enemies.all { !it.isAlive }
             val bossCleared = boss?.let { !it.isAlive } ?: true // true if there's no boss this level
             if (regularEnemiesCleared && bossCleared && player.x >= levelEndX - screenWidth * 0.5f) {
-                state = GameState.VICTORY
+                state = GameState.STORY_OUTRO
+                soundManager.playLevelComplete()
             }
         }
     }
@@ -317,6 +393,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
 
                     if (wasAlive && !enemy.isAlive) {
                         particles.emitDefeatBurst(enemy.x, enemy.y - heroHeight * 0.5f, enemyGlowColor)
+                        soundManager.playEnemyDefeated()
                         triggerShake(0.25f, 18f)
                     }
                 }
@@ -342,6 +419,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
 
                 if (wasAlive && !currentBoss.isAlive) {
                     particles.emitDefeatBurst(currentBoss.x, currentBoss.y - heroHeight * 0.7f, bossGlowColor)
+                    soundManager.playEnemyDefeated()
                     triggerShake(0.4f, 26f)
                 }
             }
@@ -381,6 +459,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     }
 
     fun render(canvas: Canvas) {
+        if (state == GameState.MAIN_MENU) {
+            drawMainMenu(canvas)
+            return
+        }
+
         canvas.save()
 
         if (shakeTime > 0f) {
@@ -422,15 +505,17 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         canvas.restore()
 
         when (state) {
-            GameState.READY -> drawOverlay(canvas, "HERO QUEST", "Tap anywhere to start")
+            GameState.STORY_INTRO -> drawStoryScreen(canvas, isIntro = true)
+            GameState.STORY_OUTRO -> drawStoryScreen(canvas, isIntro = false)
             GameState.GAME_OVER -> drawOverlay(canvas, "DEFEATED", "Tap anywhere to retry")
-            GameState.VICTORY -> drawOverlay(canvas, "VICTORY!", "Tap anywhere to play again")
+            GameState.VICTORY -> drawOverlay(canvas, "VICTORY!", "Tap anywhere to return to menu")
             GameState.PLAYING -> {
                 joystick.draw(canvas)
                 jumpButton.draw(canvas)
                 attackButton.draw(canvas)
                 dashButton.draw(canvas)
             }
+            GameState.MAIN_MENU -> { /* handled separately via early return above */ }
         }
     }
 
@@ -464,5 +549,66 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         canvas.drawText(title, screenWidth / 2f, screenHeight * 0.42f, titlePaint)
         val subPaint = Paint(textPaint).apply { textSize = screenWidth * 0.025f; alpha = 200 }
         canvas.drawText(subtitle, screenWidth / 2f, screenHeight * 0.5f, subPaint)
+    }
+
+    private fun drawMainMenu(canvas: Canvas) {
+        canvas.drawRect(0f, 0f, screenWidth.toFloat(), screenHeight.toFloat(), bgGradientPaint)
+
+        val titlePaint = Paint(textPaint).apply { textSize = screenWidth * 0.07f }
+        canvas.drawText("HERO QUEST", screenWidth / 2f, screenHeight * 0.3f, titlePaint)
+
+        drawMenuButton(canvas, playButtonBounds, "PLAY", Color.parseColor("#E8B84B"))
+
+        if (saveManager.hasProgress() && saveManager.furthestLevelReached > 1) {
+            drawMenuButton(canvas, continueButtonBounds, "CONTINUE (Lv ${saveManager.furthestLevelReached})", Color.parseColor("#4B9CE8"))
+        }
+    }
+
+    private fun drawMenuButton(canvas: Canvas, bounds: RectF, label: String, color: Int) {
+        val buttonPaint = Paint().apply { this.color = color; isAntiAlias = true }
+        canvas.drawRoundRect(bounds, screenHeight * 0.02f, screenHeight * 0.02f, buttonPaint)
+        val labelPaint = Paint(textPaint).apply { textSize = screenWidth * 0.03f; color = Color.parseColor("#1A1326") }
+        canvas.drawText(label, bounds.centerX(), bounds.centerY() + labelPaint.textSize * 0.35f, labelPaint)
+    }
+
+    /** Shown between levels: the level's intro text before it starts, or outro text after it's cleared. */
+    private fun drawStoryScreen(canvas: Canvas, isIntro: Boolean) {
+        canvas.drawRect(0f, 0f, screenWidth.toFloat(), screenHeight.toFloat(), dimPaint)
+        val levelData = LevelRoster.byLevelNumber(currentLevelNumber)
+
+        val headerPaint = Paint(textPaint).apply { textSize = screenWidth * 0.045f }
+        val header = if (isIntro) "LEVEL $currentLevelNumber: ${levelData.title}" else "LEVEL $currentLevelNumber COMPLETE"
+        canvas.drawText(header, screenWidth / 2f, screenHeight * 0.35f, headerPaint)
+
+        val bodyText = if (isIntro) levelData.introText else levelData.outroText
+        val bodyPaint = Paint(textPaint).apply { textSize = screenWidth * 0.025f; alpha = 220 }
+        drawWrappedText(canvas, bodyText, screenWidth / 2f, screenHeight * 0.45f, screenWidth * 0.7f, bodyPaint)
+
+        val promptPaint = Paint(textPaint).apply { textSize = screenWidth * 0.02f; alpha = 180 }
+        val prompt = if (isIntro) "Tap to begin" else "Tap to continue"
+        canvas.drawText(prompt, screenWidth / 2f, screenHeight * 0.75f, promptPaint)
+    }
+
+    /** Simple word-wrapping text draw, since Canvas has no built-in multi-line text support. */
+    private fun drawWrappedText(canvas: Canvas, text: String, centerX: Float, startY: Float, maxWidth: Float, paint: Paint) {
+        val words = text.split(" ")
+        val lines = mutableListOf<String>()
+        var currentLine = StringBuilder()
+
+        for (word in words) {
+            val candidate = if (currentLine.isEmpty()) word else "${currentLine} $word"
+            if (paint.measureText(candidate) > maxWidth && currentLine.isNotEmpty()) {
+                lines.add(currentLine.toString())
+                currentLine = StringBuilder(word)
+            } else {
+                currentLine = StringBuilder(candidate)
+            }
+        }
+        if (currentLine.isNotEmpty()) lines.add(currentLine.toString())
+
+        val lineHeight = paint.textSize * 1.4f
+        for ((index, line) in lines.withIndex()) {
+            canvas.drawText(line, centerX, startY + index * lineHeight, paint)
+        }
     }
 }
