@@ -147,7 +147,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
 
         enemies.clear()
         for (spawn in levelData.enemySpawns) {
-            enemies.add(Enemy(startX = levelEndX * spawn.xFraction, groundY = groundY, heightPx = heroHeight))
+            enemies.add(Enemy(startX = levelEndX * spawn.xFraction, groundY = groundY, heightPx = heroHeight, type = spawn.type))
         }
 
         boss = if (levelData.hasBoss) {
@@ -429,7 +429,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
             val enemyAttackBox = enemy.attackHitbox()
             if (enemyAttackBox != null && !enemy.hasAttackLanded() && player.isAlive) {
                 if (player.bounds().intersects(enemyAttackBox)) {
-                    player.takeDamage(8)
+                    player.takeDamage(enemy.currentMoveDamage())
                     enemy.markAttackLanded()
                     particles.emitHitSpark(player.x, player.y - heroHeight * 0.5f, enemyGlowColor)
                     triggerShake(0.18f, 14f)
@@ -567,7 +567,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     private fun drawMenuButton(canvas: Canvas, bounds: RectF, label: String, color: Int) {
         val buttonPaint = Paint().apply { this.color = color; isAntiAlias = true }
         canvas.drawRoundRect(bounds, screenHeight * 0.02f, screenHeight * 0.02f, buttonPaint)
-        val labelPaint = Paint(textPaint).apply { textSize = screenWidth * 0.03f; color = Color.parseColor("#1A1326") }
+        val labelPaint = Paint(textPaint).apply { textSize = screenWidth * 0.03f; this.color = Color.parseColor("#1A1326") }
         canvas.drawText(label, bounds.centerX(), bounds.centerY() + labelPaint.textSize * 0.35f, labelPaint)
     }
 

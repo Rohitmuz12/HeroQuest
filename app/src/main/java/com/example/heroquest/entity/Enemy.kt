@@ -3,45 +3,47 @@ package com.example.heroquest.entity
 import android.graphics.Canvas
 
 /**
- * A ground-based enemy: patrols, then chases and attacks the player when in range.
- * Deliberately simpler than Player (no jumping) since Phase 1 enemies are melee
- * brawlers on the same platform tier as the player, not platform-hopping foes.
+ * A ground-based enemy: patrols, then chases and attacks the player when in
+ * range. Stats, attack move, speed, and color all derive from `type`, so the
+ * 4 enemy variants are real data differences, not just palette swaps.
  */
-class Enemy(startX: Float, groundY: Float, private val heightPx: Float) {
+class Enemy(startX: Float, groundY: Float, private val heightPx: Float, private val type: EnemyType = EnemyType.BRAWLER) {
 
     var x = startX
     val y = groundY // enemies don't leave their platform's surface in Phase 1
 
-    var maxHp = 40
+    var maxHp = hpFor(type)
     var currentHp = maxHp
     val isAlive: Boolean get() = currentHp > 0
 
-    private val moveSpeed = 160f
-    private val attackRange = heightPx * 0.7f
+    private val moveSpeed = speedFor(type)
+    private val attackMove = attackMoveFor(type)
+    private val attackDamage = damageFor(type)
+    private val attackRange = heightPx * reachFor(type)
     private val chaseRange = heightPx * 4f
-    private val attackCooldownMax = 1.2f
+    private val attackCooldownMax = cooldownFor(type)
     private var attackCooldown = 0f
     private var attackTimer = 0f
-    private val attackDuration = 0.4f
+    private val attackDuration = durationFor(type)
     private var attackHasHit = false
 
     private var state = AnimState.IDLE
     var facingRight = true
         private set
 
-    val rig = HumanoidRig(bodyColor = 0xFFB04A4A.toInt(), limbColor = 0xFF7A3030.toInt(), heightPx = heightPx)
-    val width = heightPx * 0.32f
+    val rig = HumanoidRig(bodyColor = bodyColorFor(type), limbColor = limbColorFor(type), heightPx = heightPx)
+    val width = heightPx * widthFractionFor(type)
 
     private var hitFlashTimer = 0f
 
     fun bounds(): HitBox = HitBox(x - width / 2f, y - heightPx, x + width / 2f, y)
 
     fun attackHitbox(): HitBox? {
-        if (state != AnimState.PUNCH) return null
+        if (state != attackMove) return null
         val progress = attackTimer / attackDuration
         if (progress < 0.3f || progress > 0.8f) return null
 
-        val reach = heightPx * 0.5f
+        val reach = heightPx * (if (attackMove == AnimState.KICK) 0.65f else 0.5f)
         val dir = if (facingRight) 1f else -1f
         val centerX = x + dir * reach * 0.5f
         return HitBox(centerX - reach / 2f, y - heightPx * 0.75f, centerX + reach / 2f, y - heightPx * 0.15f)
@@ -49,6 +51,8 @@ class Enemy(startX: Float, groundY: Float, private val heightPx: Float) {
 
     fun hasAttackLanded(): Boolean = attackHasHit
     fun markAttackLanded() { attackHasHit = true }
+
+    fun currentMoveDamage(): Int = attackDamage
 
     fun takeDamage(amount: Int) {
         if (!isAlive) return
@@ -71,7 +75,7 @@ class Enemy(startX: Float, groundY: Float, private val heightPx: Float) {
         val distanceToPlayer = kotlin.math.abs(playerX - x)
         facingRight = playerX >= x
 
-        if (state == AnimState.PUNCH) {
+        if (state == attackMove) {
             attackTimer += dt
             if (attackTimer >= attackDuration) {
                 state = AnimState.IDLE
@@ -81,7 +85,7 @@ class Enemy(startX: Float, groundY: Float, private val heightPx: Float) {
         } else if (!playerAlive) {
             state = AnimState.IDLE
         } else if (distanceToPlayer <= attackRange && attackCooldown <= 0f) {
-            state = AnimState.PUNCH
+            state = attackMove
             attackTimer = 0f
             attackHasHit = false
             attackCooldown = attackCooldownMax
@@ -103,5 +107,75 @@ class Enemy(startX: Float, groundY: Float, private val heightPx: Float) {
         canvas.translate(x - cameraX, y)
         rig.draw(canvas, state)
         canvas.restore()
+    }
+
+    companion object {
+        private fun hpFor(type: EnemyType): Int = when (type) {
+            EnemyType.BRAWLER -> 40
+            EnemyType.BRUTE -> 70
+            EnemyType.STRIKER -> 28
+            EnemyType.GUARD -> 50
+        }
+
+        private fun speedFor(type: EnemyType): Float = when (type) {
+            EnemyType.BRAWLER -> 160f
+            EnemyType.BRUTE -> 100f
+            EnemyType.STRIKER -> 230f
+            EnemyType.GUARD -> 140f
+        }
+
+        private fun attackMoveFor(type: EnemyType): AnimState = when (type) {
+            EnemyType.BRAWLER -> AnimState.PUNCH
+            EnemyType.BRUTE -> AnimState.KICK
+            EnemyType.STRIKER -> AnimState.PUNCH
+            EnemyType.GUARD -> AnimState.PUNCH
+        }
+
+        private fun damageFor(type: EnemyType): Int = when (type) {
+            EnemyType.BRAWLER -> 8
+            EnemyType.BRUTE -> 14
+            EnemyType.STRIKER -> 6
+            EnemyType.GUARD -> 12
+        }
+
+        private fun reachFor(type: EnemyType): Float = when (type) {
+            EnemyType.BRAWLER -> 0.7f
+            EnemyType.BRUTE -> 0.85f
+            EnemyType.STRIKER -> 0.65f
+            EnemyType.GUARD -> 0.7f
+        }
+
+        private fun cooldownFor(type: EnemyType): Float = when (type) {
+            EnemyType.BRAWLER -> 1.2f
+            EnemyType.BRUTE -> 1.6f
+            EnemyType.STRIKER -> 0.7f
+            EnemyType.GUARD -> 2.0f
+        }
+
+        private fun durationFor(type: EnemyType): Float = when (type) {
+            EnemyType.BRAWLER -> 0.4f
+            EnemyType.BRUTE -> 0.5f
+            EnemyType.STRIKER -> 0.32f
+            EnemyType.GUARD -> 0.45f
+        }
+
+        private fun widthFractionFor(type: EnemyType): Float = when (type) {
+            EnemyType.BRUTE -> 0.42f
+            else -> 0.32f
+        }
+
+        private fun bodyColorFor(type: EnemyType): Int = when (type) {
+            EnemyType.BRAWLER -> 0xFFB04A4A.toInt()
+            EnemyType.BRUTE -> 0xFF8C5A3F.toInt()
+            EnemyType.STRIKER -> 0xFFB0A04A.toInt()
+            EnemyType.GUARD -> 0xFF4A6CB0.toInt()
+        }
+
+        private fun limbColorFor(type: EnemyType): Int = when (type) {
+            EnemyType.BRAWLER -> 0xFF7A3030.toInt()
+            EnemyType.BRUTE -> 0xFF5C3A28.toInt()
+            EnemyType.STRIKER -> 0xFF7A6E30.toInt()
+            EnemyType.GUARD -> 0xFF304A7A.toInt()
+        }
     }
 }
